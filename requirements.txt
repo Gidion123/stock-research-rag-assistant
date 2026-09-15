@@ -1,0 +1,68 @@
+# =========================
+# LangChain
+# =========================
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-community==0.3.31
+langchain-groq==0.3.8
+langchain-huggingface==0.3.1
+langchain-text-splitters==0.3.11
+langchain-postgres==0.0.16
+
+# Pada Pengerjaan Project Menggunakan Deepseek
+langchain-openai
+
+# =========================
+# Embeddings
+# =========================
+sentence-transformers==3.4.1
+torch==2.6.0
+
+# =========================
+# PostgreSQL + PgVector
+# =========================
+pgvector==0.3.6
+psycopg[binary]==3.2.9
+sqlalchemy==2.0.41
+
+# =========================
+# PDF Processing
+# =========================
+pypdf==5.4.0
+pdfplumber==0.11.9
+
+# =========================
+# Data Processing
+# =========================
+pandas==2.2.3
+numpy==2.2.4
+
+# =========================
+# Evaluation
+# =========================
+scikit-learn==1.6.1
+
+# =========================
+# Streamlit
+# =========================
+streamlit==1.44.1
+
+# =========================
+# Environment
+# =========================
+python-dotenv==1.1.0
+
+# =========================
+# Testing
+# =========================
+pytest==8.3.5
+
+# =========================
+# Existing RAG Experiments
+# =========================
+rank-bm25==0.2.2
+ipywidgets==8.1.5
+langfuse==3.0.3
+
+# API for realtime Stock Price
+yfinance==1.7.0
