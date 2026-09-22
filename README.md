@@ -1,7 +1,6 @@
 # Stock Research Assistant
 
-**Name:** Gidion Depari  -
-**LinkedIn:** [LinkedIn Profile](https://www.linkedin.com/in/gidion2)
+**Name:** Gidion Depari · **LinkedIn:** [linkedin.com/in/gidion2](https://www.linkedin.com/in/gidion2)
 
 ![Application Preview](figures/UI-Chat-Bot.png)
 
@@ -18,6 +17,7 @@
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [What It Can Do](#what-it-can-do)
+- [User Flow](#user-flow)
 - [Architecture](#architecture)
 - [Evaluation Results](#evaluation-results)
 - [Project Structure](#project-structure)
@@ -60,10 +60,12 @@ Requirements: **Python 3.10+**, **PostgreSQL with the `pgvector` extension**, an
 # 1. Install dependencies and add credentials
 pip install -r requirements.txt
 cp .env.example .env          # fill in DATABASE_URL and DEEPSEEK_API_KEY
+
 # 2. Build the knowledge base from PDFs in data/knowledge_base/primary/
 python -m scripts.create_database
 python -m scripts.ingest_knowledge_base
 python -m scripts.build_gold_chunks
+
 # 3. Run the application
 streamlit run app.py
 ```
@@ -84,7 +86,54 @@ On the first run, step 2 downloads the embedding model from Hugging Face. After 
 | "I bought BBRI at 4,000, how much profit do I have?" | `LIVE_COMPARE` | profit/loss is calculated in Python, LLM only explains it |
 | "What is the price of gold today?" | `OUT_OF_SCOPE` | rejected before even reading a document |
 
-The conversation keeps memory while the session is active. After discussing BBRI, a question such as "What about the target?" is still answered for BBRI. Only the **search query** is completed with the missing context. The question sent to the model remains the user's original question. New documents can be uploaded directly from the interface, and they use the exact same ingestion pipeline as the command line flow.
+The conversation keeps memory while the session is active. After discussing BBRI, a question such as "What about the target?" is still answered for BBRI. Only the **search query** is completed with the missing context; the question sent to the model remains the user's original wording.
+
+New documents can be uploaded directly from the interface, and they use the exact same ingestion pipeline as the command line flow.
+
+---
+
+## User Flow
+
+The section above describes what the system can do and the one below describes how it is built. This section is the path the user actually walks through the interface.
+
+```text
+   open the app
+        │
+        ▼
+   sidebar lists the research documents already in the knowledge base
+        │
+        ▼
+   ask a question ──── click one of the four example cards
+        │              or type a question in the input box
+        ▼
+   read the answer, with [file name p.N] next to each claim
+        │
+        ├──► follow up without repeating the ticker
+        │    "What about the target?" is still answered for BBRI
+        │
+        ├──► ask for a price or a position
+        │    the answer carries a timestamp and a delay notice
+        │
+        ├──► add a document from the sidebar
+        │    it is chunked and embedded, then searchable immediately
+        │
+        └──► press "Percakapan baru"
+             memory is cleared and the example cards come back
+```
+
+**1. Open the app.** The sidebar shows every research document currently in the knowledge base, so it is clear what the assistant can and cannot answer from before the first question is asked.
+
+**2. Ask.** Four example cards cover the four things the system does: outlook from the research, current price, comparing price against a target, and calculating a position. They disappear once the conversation starts. Typing a question directly works the same way.
+
+**3. Read the answer.** Claims taken from the documents carry `[file name p.N]` inline, so any number can be traced back to a page. Market numbers deliberately carry no citation: no page in any PDF contains today's price, so a citation there would be a fake one.
+
+**4. Follow up.** The assistant remembers which stock is being discussed for the rest of the session, so follow-up questions do not need to repeat the ticker.
+
+**5. Add your own document.** Upload a PDF from the sidebar and it goes through the same ingestion pipeline used to build the knowledge base. There is no second code path that could behave differently.
+
+**6. Start over.** "Percakapan baru" clears the conversation and its memory. Reloading the page does the same thing. Nothing from a previous session leaks into a new one.
+
+**When the system cannot answer.** Three different outcomes, and each one is deliberate rather than a generic error message. A question outside the knowledge base gets a refusal instead of a guess. An ambiguous stock name produces a clarifying question instead of a pick. A failed price fetch is reported as a temporary failure, and the language model is not called at all, because a model asked to compare without numbers will invent them.
 
 ---
 
@@ -167,6 +216,8 @@ Three decisions in this flow have a major impact on the quality of the whole sys
 
 What makes this different from a standard RAG system is that the **router runs first**, so the decision to read documents, get a price, or reject the question is made before any document is read and before any network request is sent. Entity resolution also **does not use a ticker registry built at the start**. The ticker is resolved at query time, starting from the cheapest method and moving to the more expensive one only when needed.
 
+The diagram above simplifies two things worth knowing. The RAG path also calls the entity resolver, but with the semantic level switched off, using only the two free deterministic levels to record which stock is being discussed. And `LIVE_COMPARE` reaches the retriever as well, because comparing a price against a target needs both sources; the order there is price first, then profit/loss in Python, then the documents, and only then the language model.
+
 ### Rules Behind the Design
 
 The following eight rules are enforced by tests, not merely by convention.
@@ -185,8 +236,8 @@ The following eight rules are enforced by tests, not merely by convention.
 ## Evaluation Results
 
 ```bash
-python -m scripts.evaluate                      # retrieval
-python -m scripts.evaluate_answers              # answers, RAG only
+python -m scripts.evaluate                       # retrieval
+python -m scripts.evaluate_answers               # answers, RAG only
 python -m scripts.evaluate_answers --end-to-end  # answers, through router
 python -m scripts.evaluate_router --llm --semantik
 ```
@@ -195,7 +246,7 @@ Dataset: **25 questions**, 20 in scope and 5 out of scope, across 4 documents (3
 
 ### Retrieval (chunk level, k=8)
 
-Metrics are reported at the **chunk level**, not the source level. With four documents and k=8, source-level metrics are not very informative; they report 1.0000 in nearly every case.
+Metrics are reported at the **chunk level**, not the source level. With four documents and k=8, source-level metrics cannot really fail: the same run reports a source-level hit rate of 1.0000 and recall of 1.0000, which measures almost nothing.
 
 | k | HitRate | Recall | Precision |
 |---:|---:|---:|---:|
@@ -204,7 +255,9 @@ Metrics are reported at the **chunk level**, not the source level. With four doc
 | 5 | 0.8500 | 0.4931 | 0.2500 |
 | 8 | **0.9000** | 0.5472 | 0.1688 |
 
-MRR **0.5371** · 74 gold chunks · average 3.7 per question · 19 strict, 1 relaxed Precision@8 is low by design: on average only 3.7 of the 8 chunks are gold, so the rest are counted as wrong even though k is intentionally loose. For this case, HitRate and MRR are more useful.
+MRR **0.5371** · 74 gold chunks · average 3.7 per question · 19 strict, 1 relaxed
+
+Precision@8 is low by design: on average only 3.7 of the 8 chunks are gold, so the rest are counted as wrong even though k is intentionally loose. For this case, HitRate and MRR are more useful.
 
 ### End-to-End Answer Quality
 
@@ -220,10 +273,14 @@ The evaluation contains **25 questions**: 20 in scope and 5 out of scope.
 |---|---:|
 | Answer Rate | **0.9000** |
 | Citation Rate | **1.0000** |
+| Citation Accuracy | **1.0000** |
 | False Refusal Rate | **0.0000** |
 | Out-of-Scope Refusal | **1.0000** |
+| Average latency | 9.62 s |
 
-The **0.9000 Answer Rate** corresponds to two in-scope cases that remain problematic: `ihsg_02` and `equity_03`. Citation Rate is 1.0000 for the answers that were produced, while the system made no false refusals and rejected all five out-of-scope questions.
+`Answer Rate` here measures **keyword coverage**, not whether an answer was produced. It is the share of in-scope questions whose answer contains every expected keyword. The score of 0.9000 means 18 of 20 questions were fully covered, and the two that were not are `ihsg_02` and `equity_03`. Both of them still produced an answer with valid citations; they simply did not contain the expected keywords, which is why `False Refusal Rate` stays at 0.0000.
+
+`Citation Rate` is the share of answers carrying a citation at all, while `Citation Accuracy` checks each citation against the chunks actually sent to the model. Both are 1.0000: no answer went uncited, and no citation pointed at a document that was not in the context.
 
 The intent distribution observed in this same end-to-end run was:
 
@@ -233,7 +290,7 @@ The intent distribution observed in this same end-to-end run was:
 | `OUT_OF_SCOPE` | 3 |
 | `LIVE_PRICE` | 1 |
 
-This means one out-of-scope question still entered the RAG path and one entered the LIVE_PRICE path, but the downstream safeguards rejected both. As a result, the final Out-of-Scope Refusal score remained **1.0000**.
+With 20 in-scope questions, this means one out-of-scope question entered the RAG path and one entered the LIVE_PRICE path, but the downstream safeguards rejected both. The gold-price question was stopped by the entity resolver because "emas" cannot be resolved as a stock, and the other was refused by the grounding rules in the prompt. The final Out-of-Scope Refusal score is **1.0000** because the refusal is layered, not because the router caught everything.
 
 ### Runtime Cost and Network Activity (One End-to-End Run, 25 Questions)
 
@@ -244,18 +301,25 @@ This means one out-of-scope question still entered the RAG path and one entered 
 | Yahoo Finance requests | **0** (cache hits: 0) |
 | LLM calls | **35** (router 13 · resolver 1 · answers 21) |
 
-The zero Yahoo Finance request count is expected for this run. Although the dataset contains an out-of-scope question asking for the current gold price, it does not contain a supported stock-price query that proceeds to Yahoo Finance. The gold-price question is rejected by the entity/scope safeguards before any Yahoo request is made. Research-only RAG questions also do not call Yahoo Finance.
+The zero Yahoo Finance request count is expected for this run. The dataset contains no supported stock-price question that would proceed to Yahoo Finance, and the one out-of-scope question asking for the gold price is rejected before any request is made. Research-only RAG questions do not call Yahoo Finance at all, which is rule 1 above.
 
 > All numbers above come from the same revised dataset. `scripts/evaluate.py` stores the dataset fingerprint together with the results and **refuses to compare** two runs with different datasets. Changes to annotations must not look like system improvements.
 
 ### Two Known In-Scope Failures
 
-The latest end-to-end evaluation flags two in-scope questions with incomplete keyword coverage at `k=8`:
+The same two questions fail in both evaluations, and that is not a coincidence:
 
-- **`ihsg_02`**: expected keywords include `MSCI` and `rupiah`, but neither is covered by the retrieved evidence (`matched: []`). The relevant answer content falls across a chunk boundary, so the retriever reaches related context without retrieving the continuation that contains the required factors.
-- **`equity_03`**: expected keywords include `stripping ratio` and `Rp172`, but neither is covered by the retrieved evidence (`matched: []`). The gold annotation is intentionally focused on the concrete BUMI risks rather than generic mentions of BUMI and risk.
+| Question | HitRate@8 | Keywords matched |
+|---|---|---|
+| `ihsg_02` | miss | `MSCI`, `rupiah` → none |
+| `equity_03` | miss | `stripping ratio`, `Rp172` → none |
 
-These failures are consistent with the current retrieval baseline: chunk size 500, overlap 80, `paraphrase-multilingual-MiniLM-L12-v2`, similarity search, and `k=8`. Fixing them requires testing a revised retrieval or chunking strategy rather than changing the evaluation labels simply to increase the score.
+Retrieval missing the gold chunks is the cause and the empty keyword match is the consequence. The model cannot state a number it was never shown, and to its credit it did not invent one: both answers stayed grounded in the chunks it did receive, and both carried valid citations.
+
+- **`ihsg_02`** — the gold chunks are the *continuation* of a paragraph that was itself retrieved. The retriever picked up the first half of the Executive Summary and missed the second half, which is where the list of factors lives. The chunk boundary separates the topic sentence from its own answer.
+- **`equity_03`** — the gold annotation was deliberately narrowed to the concrete BUMI risks (stripping ratio, the Rp172 stop loss). Before that correction, this question "passed" through an opening paragraph that happened to contain the words "BUMI" and "risiko" without answering anything, which was a false pass.
+
+Both are left failing honestly. Fixing them means changing the retrieval baseline that is deliberately frozen (chunk size 500, overlap 80, `paraphrase-multilingual-MiniLM-L12-v2`, similarity search, `k=8`), not relabelling the evaluation data to raise the score.
 
 ---
 
@@ -353,8 +417,14 @@ All configurable values are in `src/config.py`, and they are stored with each ev
 
 - Market prices may be delayed by a few minutes and are not live exchange quotes. Every price answer includes a timestamp and disclaimer.
 - Answers are limited to the knowledge base. Outside questions are rejected.
-- Conversation memory lives during the session and is cleared when "New Conversation" is selected or the page is reloaded.
-- Evaluation numbers apply to a 4-document / 308-chunk scale. The system has not yet been tested on a larger corpus. **The most important design decision:** the router runs before retrieval. This makes out-of-scope questions stop without cost and makes the claim of "zero Yahoo requests for research questions" measurable. **One limitation that is not finished yet:** `ihsg_02` fails because the chunk boundary separates the topic sentence from the list of answers. This is a chunking problem, not an embedding problem. **Next test:** compare paragraph-based chunking against the current 500/80 baseline, using the same dataset fingerprint so the two numbers can actually be compared.
+- Conversation memory lives during the session and is cleared when "Percakapan baru" is selected or the page is reloaded.
+- Evaluation numbers apply to a 4-document / 308-chunk scale. The system has not yet been tested on a larger corpus.
+
+**The most important design decision:** the router runs before retrieval. This makes out-of-scope questions stop without cost, and it makes the claim of "zero Yahoo requests for research questions" measurable rather than aspirational.
+
+**One limitation that is not finished yet:** `ihsg_02` fails because the chunk boundary separates the topic sentence from the list of answers. That is a chunking problem, not an embedding problem.
+
+**Next test:** compare paragraph-based chunking against the current 500/80 baseline, using the same dataset fingerprint so the two numbers can actually be compared.
 
 ---
 
