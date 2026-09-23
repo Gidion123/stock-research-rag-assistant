@@ -15,6 +15,7 @@ command; it calls `tambah_pdf()`.
 import hashlib
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from src import config
@@ -96,12 +97,115 @@ def sidik_jari_berkas(path):
     return digest.hexdigest()[:16]
 
 
-def daftar_dokumen(include_additional=None):
-    """The PDFs that currently make up the knowledge base."""
+_JEDA_SETELAH_GAGAL = 60
+_gagal_terakhir = None
+
+
+def sumber_di_vector_store(timeout=2):
+    """
+    The document names the vector store actually holds.
+
+    A PDF sitting in a folder is not the same thing as a PDF the
+    assistant can answer from: a file copied in by hand is on disk but
+    has never been embedded. Asking the database is the only way to tell
+    them apart.
+
+    Returns a set of file names, or None when the database cannot be
+    asked. None means "no opinion" - the caller then falls back to
+    listing files, which is better than showing nothing.
+
+    A failed attempt is remembered for a minute so that a database which
+    is down does not cost every page render a connection timeout.
+    """
+    global _gagal_terakhir
+
+    if (
+        _gagal_terakhir is not None
+        and time.monotonic() - _gagal_terakhir < _JEDA_SETELAH_GAGAL
+    ):
+        return None
+
+    try:
+        import psycopg
+
+        from src.vector_store import TABLE_NAME, get_psycopg_connection_url
+
+        with psycopg.connect(
+            get_psycopg_connection_url(),
+            connect_timeout=timeout,
+        ) as connection:
+            with connection.cursor() as cursor:
+                # The metadata column name comes from langchain_postgres
+                # and is not ours to assume, so it is looked up rather
+                # than hard-coded.
+                cursor.execute(
+                    "SELECT column_name, data_type "
+                    "FROM information_schema.columns "
+                    "WHERE table_name = %s;",
+                    (TABLE_NAME,),
+                )
+                kolom = dict(cursor.fetchall())
+
+                if "source" in kolom:
+                    cursor.execute(
+                        f"SELECT DISTINCT source FROM {TABLE_NAME} "
+                        f"WHERE source IS NOT NULL;"
+                    )
+                else:
+                    json_kolom = next(
+                        (
+                            nama
+                            for nama, tipe in kolom.items()
+                            if tipe in ("jsonb", "json")
+                        ),
+                        None,
+                    )
+
+                    if not json_kolom:
+                        return None
+
+                    cursor.execute(
+                        f"SELECT DISTINCT {json_kolom} ->> 'source' "
+                        f"FROM {TABLE_NAME} "
+                        f"WHERE {json_kolom} ->> 'source' IS NOT NULL;"
+                    )
+
+                _gagal_terakhir = None
+
+                return {baris[0] for baris in cursor.fetchall()}
+
+    except Exception:
+        _gagal_terakhir = time.monotonic()
+
+        return None
+
+
+def daftar_dokumen(include_additional=None, verifikasi=False):
+    """
+    The PDFs that currently make up the knowledge base.
+
+    With `verifikasi=True` the list is narrowed to documents the vector
+    store really contains. That is what the sidebar wants: it answers
+    "what can this assistant answer from", and a file that was copied
+    into the folder by hand has never been embedded, so listing it
+    promises something the assistant cannot deliver.
+
+    If the database cannot be reached the file listing is returned
+    unfiltered, because a sidebar that shows a little too much is better
+    than a sidebar that shows nothing.
+    """
     from src.preprocessing import get_pdf_files
 
     if include_additional is None:
         include_additional = config.INCLUDE_ADDITIONAL_DOCUMENTS
+
+    berkas = get_pdf_files(include_additional=include_additional)
+
+    if verifikasi:
+        sumber = sumber_di_vector_store()
+
+        if sumber is not None:
+            berkas = [p for p in berkas if p.name in sumber]
 
     return [
         {
@@ -109,7 +213,7 @@ def daftar_dokumen(include_additional=None):
             "folder": p.parent.name,
             "size_mb": round(p.stat().st_size / (1024 * 1024), 2),
         }
-        for p in get_pdf_files(include_additional=include_additional)
+        for p in berkas
     ]
 
 
@@ -302,6 +406,7 @@ __all__ = [
     "validasi_pdf",
     "sidik_jari_berkas",
     "daftar_dokumen",
+    "sumber_di_vector_store",
     "tambah_pdf",
     "bangun_ulang",
 ]

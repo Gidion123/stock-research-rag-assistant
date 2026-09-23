@@ -22,6 +22,7 @@ import streamlit as st
 
 from src import memory
 from src.assistant import jawab
+from src.embeddings import EmbeddingTidakTersedia
 from src.ingestion import IngestionError, daftar_dokumen, tambah_pdf
 
 
@@ -60,6 +61,18 @@ CONTOH = [
 PESAN_GAGAL_UMUM = (
     "Maaf, ada kendala saat memproses pertanyaan Anda. "
     "Silakan coba lagi sebentar lagi."
+)
+
+# A broken embedding install is not a temporary glitch, so it must not be
+# answered with "try again later" - that sends the reader off looking for
+# a network problem that is not there. The terminal already carries the
+# root cause; this message only has to say that waiting will not help.
+PESAN_MODEL_TIDAK_SIAP = (
+    "Pencarian dokumen riset sedang tidak bisa dijalankan karena model "
+    "pencarinya gagal dimuat di environment ini. Ini bukan gangguan "
+    "sementara — mencoba lagi tidak akan menolong. Penyebabnya tercetak "
+    "di terminal, dan `python -m scripts.diagnose_embeddings` "
+    "memeriksanya lebih rinci."
 )
 
 
@@ -472,7 +485,12 @@ with st.sidebar:
     st.markdown('<div class="bi-label">Dokumen riset</div>', True)
 
     try:
-        dokumen = daftar_dokumen()
+        # The sidebar answers "what can this assistant answer from", so
+        # it lists additional/ too (uploads land there and must show up),
+        # and it checks the list against the vector store. A PDF someone
+        # copied into the folder by hand is on disk but was never
+        # embedded; listing it would promise an answer that cannot come.
+        dokumen = daftar_dokumen(include_additional=True, verifikasi=True)
     except Exception:
         logger.exception("Gagal membaca daftar dokumen")
         dokumen = []
@@ -501,7 +519,19 @@ with st.sidebar:
         if st.button("Tambahkan ke koleksi", use_container_width=True):
             with st.spinner("Membaca dan menyiapkan dokumen…"):
                 try:
-                    ringkas = tambah_pdf(berkas, nama_berkas=berkas.name)
+                    # Uploads go to the additional/ folder, never to
+                    # primary/. primary/ is the frozen corpus every
+                    # evaluation number was measured on; dropping a new
+                    # document into it would silently make those numbers
+                    # irreproducible. The upload is still embedded right
+                    # away, so it is searchable immediately - it just
+                    # does not join the baseline unless
+                    # INCLUDE_ADDITIONAL_DOCUMENTS is turned on.
+                    ringkas = tambah_pdf(
+                        berkas,
+                        nama_berkas=berkas.name,
+                        ke_folder_tambahan=True,
+                    )
 
                 except IngestionError as kendala:
                     # IngestionError messages are written for the user.
@@ -557,6 +587,8 @@ if pertanyaan:
     with st.container(key=kunci_gelembung("assistant", nomor_jawaban)):
         with st.chat_message("assistant", avatar=LAMBANG_ASISTEN):
             with st.spinner("Sedang menelusuri dokumen riset…"):
+                kegagalan = PESAN_GAGAL_UMUM
+
                 try:
                     memori = st.session_state.memori
 
@@ -569,14 +601,22 @@ if pertanyaan:
                         ),
                     )
 
+                except EmbeddingTidakTersedia:
+                    # The install is broken, not the network. Say so
+                    # instead of suggesting a retry that cannot work.
+                    logger.exception("Model embedding tidak bisa dimuat")
+                    hasil = None
+                    kegagalan = PESAN_MODEL_TIDAK_SIAP
+
                 except Exception:
                     # PgVector down, an expired service key, a corrupt
                     # document - none of it may take the page down.
                     logger.exception("Gagal menjawab pertanyaan")
                     hasil = None
+                    kegagalan = PESAN_GAGAL_UMUM
 
             if hasil is None:
-                jawaban = PESAN_GAGAL_UMUM
+                jawaban = kegagalan
             else:
                 jawaban = hasil.get("answer") or PESAN_GAGAL_UMUM
 

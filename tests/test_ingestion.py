@@ -193,8 +193,56 @@ def test_daftar_dokumen_menyebut_pdf_aktif():
         assert d["size_mb"] > 0
 
 
-def test_dokumen_tambahan_tetap_opt_in():
+def test_dokumen_tambahan_tetap_opt_in(monkeypatch, tmp_path):
+    """
+    `daftar_dokumen` honours the opt-in, whatever is on disk.
+
+    The earlier version asserted `primary < extended`, a strict subset,
+    which silently required additional/ to hold at least one file. That
+    made an empty additional/ - a perfectly normal state - look like a
+    bug, and it broke the moment a test document was moved out.
+    """
+    from src import config
+
+    primary_dir = tmp_path / "primary"
+    additional_dir = tmp_path / "additional"
+    primary_dir.mkdir()
+    additional_dir.mkdir()
+
+    (primary_dir / "baseline.pdf").write_bytes(b"%PDF")
+    (additional_dir / "tambahan.pdf").write_bytes(b"%PDF")
+
+    monkeypatch.setattr(config, "PRIMARY_DIR", primary_dir)
+    monkeypatch.setattr(config, "ADDITIONAL_DIR", additional_dir)
+
     primary = {d["name"] for d in daftar_dokumen(include_additional=False)}
     extended = {d["name"] for d in daftar_dokumen(include_additional=True)}
 
+    assert primary == {"baseline.pdf"}
+    assert extended == {"baseline.pdf", "tambahan.pdf"}
     assert primary < extended
+
+
+def test_daftar_dokumen_dengan_folder_tambahan_kosong(monkeypatch, tmp_path):
+    """
+    An empty additional/ must give the same list as primary alone.
+
+    Not an error, and not an empty list - this is the state the project
+    sits in after a rebuild, and the state a reviewer clones into.
+    """
+    from src import config
+
+    primary_dir = tmp_path / "primary"
+    additional_dir = tmp_path / "additional"
+    primary_dir.mkdir()
+    additional_dir.mkdir()
+
+    (primary_dir / "baseline.pdf").write_bytes(b"%PDF")
+
+    monkeypatch.setattr(config, "PRIMARY_DIR", primary_dir)
+    monkeypatch.setattr(config, "ADDITIONAL_DIR", additional_dir)
+
+    primary = {d["name"] for d in daftar_dokumen(include_additional=False)}
+    extended = {d["name"] for d in daftar_dokumen(include_additional=True)}
+
+    assert primary == extended == {"baseline.pdf"}

@@ -42,6 +42,26 @@ numpy==2.2.4
 # =========================
 scikit-learn==1.6.1
 
+# scikit-learn pulls in scipy, and on recent macOS the scipy 1.15.x
+# wheel will not load: its `_propack` binary has a zero-fill
+# `__DATA/__thread_bss` section with a non-zero offset, which the newer
+# dyld refuses. The failure surfaces far from here - importing
+# sentence-transformers reports "Could not import sentence_transformers"
+# even though the package is installed - because the import chain runs
+# sentence-transformers -> transformers -> scikit-learn -> scipy.
+#
+# scipy 1.16.0 is the first release that loads, and it needs Python
+# 3.11+. On Python 3.10 there is no scipy release that works, so the fix
+# is to move the environment to Python 3.11 or newer:
+#
+#   conda create -n rag_assistant python=3.11
+#   conda activate rag_assistant
+#   pip install -r requirements.txt
+#
+# `python -m scripts.diagnose_embeddings` reports whether the model
+# loads at all on this machine.
+scipy>=1.16.0; python_version >= "3.11"
+
 # =========================
 # Streamlit
 # =========================

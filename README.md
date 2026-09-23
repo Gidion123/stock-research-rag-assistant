@@ -6,7 +6,7 @@
 
 **RAG chatbot for Indonesian stock research.** It answers questions using Gidion's personal collection of research documents, cites file names and page numbers, retrieves market prices only when a question actually requires them, and calculates profit/loss in Python rather than in the language model.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-1.44-FF4B4B?logo=streamlit&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL%20%2B%20pgvector-336791?logo=postgresql&logoColor=white) ![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C3C) ![Tests](https://img.shields.io/badge/tests-324%20passed-success)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-1.44-FF4B4B?logo=streamlit&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL%20%2B%20pgvector-336791?logo=postgresql&logoColor=white) ![LangChain](https://img.shields.io/badge/LangChain-0.3-1C3C3C) ![Tests](https://img.shields.io/badge/tests-363%20passed-success)
 
 > ⚠️ The output of this system is a summary of research documents, **not investment advice**. Market prices come from Yahoo Finance and may be delayed by a few minutes.
 
@@ -33,7 +33,7 @@
 
 The problem is simple: stock research documents keep piling up, and answering one question means opening PDFs one by one. Sending the same question to a general language model can produce an answer that sounds convincing but cannot be checked, and for decisions involving money, that is not enough. This system addresses that gap with three rules enforced by the code, not just by intention:
 
-1. **Every claim from a document must have a citation** `[file name p.N]`, and the citation is verified against the actual document chunks sent to the model.
+1. **Every claim from a document must have a citation** — literally `[Nama File hal.N]`, since the assistant answers in Indonesian — and the citation is verified against the actual document chunks sent to the model.
 2. **Market prices come from a price source**, only when the question actually needs price data, not from the model's memory.
 3. **Questions outside the supported scope are rejected**, not guessed.
 
@@ -88,7 +88,7 @@ On the first run, step 2 downloads the embedding model from Hugging Face. After 
 
 The conversation keeps memory while the session is active. After discussing BBRI, a question such as "What about the target?" is still answered for BBRI. Only the **search query** is completed with the missing context; the question sent to the model remains the user's original wording.
 
-New documents can be uploaded directly from the interface, and they use the exact same ingestion pipeline as the command line flow.
+New documents can be uploaded directly from the interface, and they use the exact same ingestion pipeline as the command line flow. They are searchable as soon as the upload finishes.
 
 ---
 
@@ -115,13 +115,13 @@ The section above describes what the system can do and the one below describes h
         │    the answer carries a timestamp and a delay notice
         │
         ├──► add a document from the sidebar
-        │    it is chunked and embedded, then searchable immediately
+        │    embedded into additional/, searchable straight away
         │
         └──► press "Percakapan baru"
              memory is cleared and the example cards come back
 ```
 
-**1. Open the app.** The sidebar shows every research document currently in the knowledge base, so it is clear what the assistant can and cannot answer from before the first question is asked.
+**1. Open the app.** The sidebar lists the documents the assistant can actually answer from, so the scope is clear before the first question. It is checked against the vector store, not just the folder: a PDF copied into the folder by hand has never been embedded, and listing it would promise an answer that cannot come.
 
 **2. Ask.** Four example cards cover the four things the system does: outlook from the research, current price, comparing price against a target, and calculating a position. They disappear once the conversation starts. Typing a question directly works the same way.
 
@@ -129,7 +129,7 @@ The section above describes what the system can do and the one below describes h
 
 **4. Follow up.** The assistant remembers which stock is being discussed for the rest of the session, so follow-up questions do not need to repeat the ticker.
 
-**5. Add your own document.** Upload a PDF from the sidebar and it goes through the same ingestion pipeline used to build the knowledge base. There is no second code path that could behave differently.
+**5. Add your own document.** Upload a PDF from the sidebar and it goes through the same ingestion pipeline used to build the knowledge base. There is no second code path that could behave differently. The upload lands in `additional/` rather than `primary/`, so it is searchable right away without disturbing the frozen corpus the evaluation numbers were measured on.
 
 **6. Start over.** "Percakapan baru" clears the conversation and its memory. Reloading the page does the same thing. Nothing from a previous session leaks into a new one.
 
@@ -188,35 +188,87 @@ Three decisions in this flow have a major impact on the quality of the whole sys
 ### Flow B: From Question to Answer (Online)
 
 ```text
-                               question
-                                  │
-                          ┌───────▼────────┐
-                          │     ROUTER     │  patterns first, LLM only
-                          │ (src/router.py)│  when the pattern is unclear
-                          └───────┬────────┘
-              ┌───────────────────┼─────────────────────┐
-              │                   │                     │
-        OUT_OF_SCOPE             RAG          LIVE_PRICE / LIVE_COMPARE
-              │                   │                     │
-            stop          ┌───────▼────────┐    ┌───────▼─────────┐
-        (0 network)       │   retriever    │    │ ENTITY RESOLVER │
-                          │   PgVector     │    │ 1. explicit     │ regex, deterministic
-                          │     k=8        │    │ 2. session      │ "that stock" → BBRI
-                          └───────┬────────┘    │ 3. semantic     │ PgVector + LLM
-                                  │             └───────┬─────────┘
-                          ┌───────▼────────┐            │
-                          │    LLM +       │    ┌───────▼─────────┐
-                          │    prompt      │    │ market_data     │ Yahoo Finance
-                          │    grounding   │    │ profit_loss     │ calculated in Python
-                          └───────┬────────┘    └───────┬─────────┘
-                                  └──────────┬───────────┘
-                                             ▼
-                                     answer + citations
+        ┌──────────────────────────────────────────────────────────┐
+        │ CONVERSATION MEMORY  ·  src/memory.py                    │
+        │ identity : which stock is being discussed                │
+        │ history  : the last turns, as short text                 │
+        └──────┬───────────────────────────────────────▲───────────┘
+               │ completes the search query            │  updated after
+               │ and supplies the identity             │  every answer
+               ▼                                       │
+           question                                    │
+               │                                       │
+       ┌───────▼────────┐                              │
+       │     ROUTER     │  patterns first,             │
+       │ (src/router.py)│  LLM only if unclear         │
+       └───────┬────────┘                              │
+   ┌───────────┴─────────────┐                         │
+   │           │             │                         │
+OUT_OF_SCOPE  RAG    LIVE_PRICE / LIVE_COMPARE         │
+   │           │             │                         │
+ stop   ┌──────▼───────┐  ┌──▼──────────────┐          │
+(0 net) │  retriever   │  │ ENTITY RESOLVER │          │
+   │    │  PgVector    │  │ 1. explicit     │          │
+   │    │    k=8       │  │ 2. session      │          │
+   │    └──────┬───────┘  │ 3. semantic     │          │
+   │           │          └──┬──────────────┘          │
+   │    ┌──────▼───────┐     │                         │
+   │    │ LLM + prompt │  ┌──▼──────────────┐          │
+   │    │ grounding    │  │ market_data     │          │
+   │    │              │  │ profit_loss     │          │
+   │    └──────┬───────┘  └──┬──────────────┘          │
+   │           │             │                         │
+   └───────────┴─────────────┴─────────────────────────┘
+                             │
+                             ▼
+                     answer + citations
 ```
 
-What makes this different from a standard RAG system is that the **router runs first**, so the decision to read documents, get a price, or reject the question is made before any document is read and before any network request is sent. Entity resolution also **does not use a ticker registry built at the start**. The ticker is resolved at query time, starting from the cheapest method and moving to the more expensive one only when needed.
+Three things in this diagram are worth pointing out.
 
-The diagram above simplifies two things worth knowing. The RAG path also calls the entity resolver, but with the semantic level switched off, using only the two free deterministic levels to record which stock is being discussed. And `LIVE_COMPARE` reaches the retriever as well, because comparing a price against a target needs both sources; the order there is price first, then profit/loss in Python, then the documents, and only then the language model.
+**The router runs first.** The decision to read documents, fetch a price
+or reject the question is made before any document is read and before
+any network request is sent. That is what makes an out-of-scope question
+cost nothing.
+
+**Conversation memory wraps the whole flow.** It is not a step inside
+it. Before routing, memory completes the search query and hands over the
+identity of the stock under discussion, which is what level 2 of the
+entity resolver reads. After the answer is produced, memory is updated
+with the turn. Memory holds identity and recent history only. A price is
+never stored as a fact, so a follow-up question always fetches it again.
+
+**Entity resolution is not a ticker registry.** Nothing is built at
+start-up. The ticker is resolved per question, cheapest method first:
+explicit code by regex, then the conversation context, then a semantic
+search that costs PgVector and one LLM call.
+
+The diagram simplifies two paths. The RAG branch also calls the entity
+resolver, with the semantic level switched off, using only the two free
+deterministic levels to record which stock is being discussed. And
+`LIVE_COMPARE` reaches the retriever too, because comparing a price
+against a target needs both sources.
+
+### Which paths call the language model
+
+Not every answer is written by the model, and that is deliberate. Where
+Python can produce the sentence exactly, it does.
+
+| Path | Ends with | Why |
+|---|---|---|
+| `RAG` | **LLM** | The answer has to be written from the eight retrieved chunks. |
+| `LIVE_PRICE` | **No LLM** | There is one number to report. Python formats the sentence directly. Calling a model to wrap a single number adds latency, cost, and one more chance for that number to change on the way through. |
+| `LIVE_COMPARE` | **LLM** | Three sources have to be reconciled: the market price, the profit/loss Python already computed, and the retrieved research. The model writes it up but is forbidden to recalculate. |
+| `OUT_OF_SCOPE` | **No LLM** | A fixed refusal message. |
+
+Two guards sit on the `LIVE_COMPARE` path. If the price fetch fails, the
+model is not called at all, because a model asked to compare without
+numbers will invent them. And if no document covers the stock, Python
+assembles the price, the profit/loss and a "no research on this one"
+note without involving the model either.
+
+Profit and loss is always computed in Python, before the model sees
+anything. The model receives a finished number and explains it.
 
 ### Rules Behind the Design
 
@@ -242,7 +294,7 @@ python -m scripts.evaluate_answers --end-to-end  # answers, through router
 python -m scripts.evaluate_router --llm --semantik
 ```
 
-Dataset: **25 questions**, 20 in scope and 5 out of scope, across 4 documents (308 chunks). One file, `evaluation/dataset/eval_questions.json`, is the single source for all evaluators.
+Dataset: **25 questions**, 20 in scope and 5 out of scope, across 4 documents (308 chunks). One file, `evaluation/dataset/eval_questions.json`, is the single source for the retrieval and answer evaluators. The router evaluator uses its own dataset, `evaluation/dataset/router_eval.json`, because it scores intent and entity rather than answers.
 
 ### Retrieval (chunk level, k=8)
 
@@ -257,7 +309,7 @@ Metrics are reported at the **chunk level**, not the source level. With four doc
 
 MRR **0.5371** · 74 gold chunks · average 3.7 per question · 19 strict, 1 relaxed
 
-Precision@8 is low by design: on average only 3.7 of the 8 chunks are gold, so the rest are counted as wrong even though k is intentionally loose. For this case, HitRate and MRR are more useful.
+Precision@8 is capped by design. Each question has only 3.7 gold chunks on average, so even a retriever that found every one of them would score 3.7/8 = 0.46 at best. The measured 0.1688 means about 1.35 of the 8 retrieved chunks were gold. With a deliberately loose k, precision is the wrong lens; HitRate and MRR are the ones that can actually move.
 
 ### End-to-End Answer Quality
 
@@ -276,7 +328,7 @@ The evaluation contains **25 questions**: 20 in scope and 5 out of scope.
 | Citation Accuracy | **1.0000** |
 | False Refusal Rate | **0.0000** |
 | Out-of-Scope Refusal | **1.0000** |
-| Average latency | 9.62 s |
+| Average latency | 8.74 s |
 
 `Answer Rate` here measures **keyword coverage**, not whether an answer was produced. It is the share of in-scope questions whose answer contains every expected keyword. The score of 0.9000 means 18 of 20 questions were fully covered, and the two that were not are `ihsg_02` and `equity_03`. Both of them still produced an answer with valid citations; they simply did not contain the expected keywords, which is why `False Refusal Rate` stays at 0.0000.
 
@@ -376,7 +428,9 @@ tests/                   21 test files
 pytest -q
 ```
 
-**324 passed, 28 skipped.** The skipped tests require PostgreSQL, an LLM API key, the embedding model, or direct network access. They are skipped automatically when their dependencies are not available, so `pytest` still provides useful results on different machines, including machines without a database. Beyond normal functional correctness, the tests protect things that can easily break silently:
+**363 passed, 4 skipped** out of 367, on a full environment with PostgreSQL, an LLM key and the embedding model all present. Those 4 are skipped by design rather than by a missing dependency: three call Yahoo Finance for real and only run with `pytest -m live`, and one covers the opt-in additional documents.
+
+On a machine with none of those, 27 tests skip themselves automatically and the result is **340 passed** - so `pytest` gives a useful answer on any machine, including a reviewer's laptop with no database. Beyond normal functional correctness, the tests protect things that can easily break silently:
 
 - RAG and out-of-scope questions make zero Yahoo requests (counted, not assumed)
 - `app.py` never shows the model name, PgVector configuration, API key, or router traces to the user
@@ -406,7 +460,7 @@ All configurable values are in `src/config.py`, and they are stored with each ev
 
 - Credentials are only read from `.env`, which is included in `.gitignore`. `.env.example` contains placeholders, not real values.
 - The interface never shows the model name, API key, PgVector configuration, or router traces, and there is a test to protect this.
-- User-uploaded documents are stored locally in `data/knowledge_base/additional/` and embedded into the local database. No files are sent to third parties except for the text chunks that are included in the LLM prompt.
+- User-uploaded documents are stored locally in `data/knowledge_base/additional/`, never in `primary/`. `primary/` is the frozen corpus every evaluation number was measured against, so an upload must not change it. The upload is embedded right away and is searchable immediately; it joins the baseline only when `INCLUDE_ADDITIONAL_DOCUMENTS` is turned on. No files are sent to third parties except for the text chunks that are included in the LLM prompt.
 - Document content is untrusted input. The prompt separates document context from instructions, and citations are verified against the documents actually sent to the model. However, the system has **not** been specifically tested against prompt injection through PDF content.
 
 ---

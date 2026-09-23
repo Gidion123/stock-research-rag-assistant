@@ -39,17 +39,66 @@ def test_primary_knowledge_base_has_four_pdfs():
     assert len(pdf_files) == 4
 
 
-def test_additional_documents_are_opt_in():
+def test_additional_documents_are_opt_in(monkeypatch, tmp_path):
     """
-    BIPI lives in data/knowledge_base/additional and must stay out of the
-    baseline unless explicitly enabled, mirroring Phase 6 of the notebook.
+    Documents in additional/ stay out of the baseline unless asked for.
+
+    This used to assert that a specific PDF (BIPI) sat in additional/,
+    which tied the test suite to the contents of a data folder the user
+    is supposed to change. Uploading or removing one document broke the
+    build. What actually matters is the rule, so the rule is what gets
+    tested, on folders this test owns.
     """
+    primary_dir = tmp_path / "primary"
+    additional_dir = tmp_path / "additional"
+    primary_dir.mkdir()
+    additional_dir.mkdir()
+
+    (primary_dir / "baseline.pdf").write_bytes(b"%PDF")
+    (additional_dir / "tambahan.pdf").write_bytes(b"%PDF")
+
+    monkeypatch.setattr(config, "PRIMARY_DIR", primary_dir)
+    monkeypatch.setattr(config, "ADDITIONAL_DIR", additional_dir)
+
     primary = [path.name for path in get_pdf_files(include_additional=False)]
     extended = [path.name for path in get_pdf_files(include_additional=True)]
 
-    assert not any("BIPI" in name for name in primary)
-    assert any("BIPI" in name for name in extended)
-    assert len(extended) == len(primary) + 1
+    assert primary == ["baseline.pdf"]
+    assert extended == ["baseline.pdf", "tambahan.pdf"]
+
+
+def test_additional_folder_may_be_empty(monkeypatch, tmp_path):
+    """
+    An empty additional/ is a normal state, not a failure.
+
+    It is what a fresh clone looks like, and what the folder looks like
+    again after a rebuild removes an uploaded document.
+    """
+    primary_dir = tmp_path / "primary"
+    additional_dir = tmp_path / "additional"
+    primary_dir.mkdir()
+    additional_dir.mkdir()
+
+    (primary_dir / "baseline.pdf").write_bytes(b"%PDF")
+
+    monkeypatch.setattr(config, "PRIMARY_DIR", primary_dir)
+    monkeypatch.setattr(config, "ADDITIONAL_DIR", additional_dir)
+
+    assert get_pdf_files(include_additional=True) == [
+        primary_dir / "baseline.pdf"
+    ]
+
+
+def test_missing_additional_folder_is_not_an_error(monkeypatch, tmp_path):
+    """The folder may not exist at all; that must not raise."""
+    primary_dir = tmp_path / "primary"
+    primary_dir.mkdir()
+    (primary_dir / "baseline.pdf").write_bytes(b"%PDF")
+
+    monkeypatch.setattr(config, "PRIMARY_DIR", primary_dir)
+    monkeypatch.setattr(config, "ADDITIONAL_DIR", tmp_path / "tidak-ada")
+
+    assert len(get_pdf_files(include_additional=True)) == 1
 
 
 # ============================================================

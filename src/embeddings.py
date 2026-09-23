@@ -22,6 +22,14 @@ A failed first attempt is NOT swallowed. The reason is kept in
 `_ALASAN_UNDUH`, which `alasan_unduh()` returns, and it is printed once
 to stderr; `sumber_model()` reports only where the model came from. If
 the second attempt fails too, its error propagates unchanged.
+
+Not every first-attempt failure means a cold cache, though. If the
+sentence-transformers import itself is broken - the package is missing,
+or one of its own dependencies fails to load its binary - then
+downloading the model cannot possibly help, and retrying only buries the
+real cause under a second identical traceback. That case is detected by
+looking for an ImportError anywhere in the exception chain, and it
+raises `EmbeddingTidakTersedia` straight away with the root cause named.
 """
 
 import sys
@@ -39,6 +47,61 @@ SUMBER_UNDUH = "unduh"
 
 _SUMBER = None
 _ALASAN_UNDUH = None
+
+
+class EmbeddingTidakTersedia(RuntimeError):
+    """
+    The embedding model cannot be loaded, and retrying will not help.
+
+    Raised for environment problems - a missing package, or one that is
+    installed but whose binary will not load. A cold cache is a different
+    thing and is handled by downloading, not by this error.
+    """
+
+
+def _rantai_kesalahan(kesalahan):
+    """
+    The exception and everything it was raised from, outermost first.
+
+    `raise X from Y` sets `__cause__`; an exception raised while handling
+    another sets `__context__`. Both are followed, because the real
+    reason is usually several links down.
+    """
+    rantai = []
+    saat_ini = kesalahan
+
+    while saat_ini is not None and not any(saat_ini is s for s in rantai):
+        rantai.append(saat_ini)
+        saat_ini = saat_ini.__cause__ or saat_ini.__context__
+
+    return rantai
+
+
+def _masalah_environment(kesalahan):
+    """
+    True when the failure is a broken install rather than a cold cache.
+
+    A cold cache surfaces as a lookup failure (OSError and friends). An
+    ImportError anywhere in the chain means Python could not load the
+    code at all, and no download fixes that.
+    """
+    return any(
+        isinstance(item, ImportError) for item in _rantai_kesalahan(kesalahan)
+    )
+
+
+def _pesan_environment(kesalahan):
+    akar = _rantai_kesalahan(kesalahan)[-1]
+
+    return (
+        "Model embedding tidak bisa dimuat, dan mengunduh ulang tidak akan "
+        "menolong: paket Python-nya sendiri gagal di-import.\n"
+        f"  penyebab akar : {type(akar).__name__}: {akar}\n"
+        "  artinya       : salah satu paket (sentence-transformers, "
+        "transformers, scikit-learn, scipy, torch) belum terpasang atau "
+        "binernya tidak bisa dimuat di mesin ini.\n"
+        "  periksa dengan: python -m scripts.diagnose_embeddings"
+    )
 
 
 def _bangun(local_files_only):
@@ -63,8 +126,18 @@ def get_embeddings():
         embeddings = _bangun(local_files_only=True)
 
     except Exception as kesalahan:
-        # Cache is cold (or broken). Download once - and say why, so
-        # "why is startup slow" does not have to be guessed.
+        # A broken install is not a cold cache. Downloading would fail
+        # the same way and hide the real cause, so stop here and name it.
+        if _masalah_environment(kesalahan):
+            pesan = _pesan_environment(kesalahan)
+            _ALASAN_UNDUH = f"{type(kesalahan).__name__}: {kesalahan}"
+
+            print(f"[embeddings] {pesan}", file=sys.stderr)
+
+            raise EmbeddingTidakTersedia(pesan) from kesalahan
+
+        # Cache is cold. Download once - and say why, so "why is startup
+        # slow" does not have to be guessed.
         _ALASAN_UNDUH = f"{type(kesalahan).__name__}: {kesalahan}"
 
         print(

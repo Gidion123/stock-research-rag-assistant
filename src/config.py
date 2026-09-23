@@ -70,11 +70,14 @@ ANSWER_RESULTS_PATH = EVAL_RESULTS_DIR / "answer_results.json"
 # KNOWLEDGE BASE SCOPE
 # ============================================================
 
-# The primary folder is the frozen baseline knowledge base.
-# The additional folder (currently: BIPI) is opt-in, mirroring
-# "Phase 6 - menambah dokumen tambahan & re-validasi" in the notebook:
-# documents are added deliberately and the system is re-evaluated,
-# never silently mixed into the baseline.
+# The primary folder is the frozen baseline knowledge base: the four
+# documents every evaluation number was measured against.
+#
+# The additional folder is opt-in and is where uploads from the UI land.
+# It mirrors "Phase 6 - menambah dokumen tambahan & re-validasi" in the
+# notebook: documents are added deliberately and the system is
+# re-evaluated, never silently mixed into the baseline. It is often
+# empty, which is a normal state and not a problem.
 #
 # Enable with:  INCLUDE_ADDITIONAL_DOCUMENTS=true  in .env
 INCLUDE_ADDITIONAL_DOCUMENTS = os.getenv(
